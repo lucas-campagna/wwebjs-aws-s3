@@ -77,8 +77,8 @@ class AwsS3Store {
         return false;
       }
       this.debugLog(`[METHOD: sessionExists] Error: ${err.message}`);
-      // throw err;
-      return
+      // On unexpected errors return false to avoid crashing the auth flow
+      return false;
     }
   }
 
