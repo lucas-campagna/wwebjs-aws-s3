@@ -53,59 +53,61 @@ class AwsS3Store {
       return true
     } catch (error) {
       console.log('Error: Invalid AwsS3Store configuration', error)
-      return true;
+      // On unexpected errors, mark config as invalid so callers can handle it
+      return false
     }
   }
 
   async sessionExists(options) {
     this.debugLog('[METHOD: sessionExists] Triggered.');
 
-    if (await this.isValidConfig(options) === false) return
+    if (await this.isValidConfig(options) === false) return false
 
-    const remoteFilePath = path.join(this.remoteDataPath, `${options.session}.zip`).replace(/\\/g, '/');
+    const sessionName = path.basename(options.session)
+    const remoteFilePath = path.posix.join(this.remoteDataPath, `${sessionName}.zip`)
     const params = {
       Bucket: this.bucketName,
       Key: remoteFilePath
-    };
+    }
     try {
       await this.s3Client.send(new HeadObjectCommand(params));
       this.debugLog(`[METHOD: sessionExists] File found. PATH='${remoteFilePath}'.`);
       return true;
     } catch (err) {
       if (err.name === 'NoSuchKey' || err.name === 'NotFound') {
-        this.debugLog(`[METHOD: sessionExists] File not found. PATH='${remoteFilePath}'.`);
-        return false;
+        this.debugLog(`[METHOD: sessionExists] File not found. PATH='${remoteFilePath}'.`)
+        return false
       }
-      this.debugLog(`[METHOD: sessionExists] Error: ${err.message}`);
+      this.debugLog(`[METHOD: sessionExists] Error: ${err.message}`)
       // On unexpected errors return false to avoid crashing the auth flow
-      return false;
+      return false
     }
   }
 
   async save(options) {
     this.debugLog('[METHOD: save] Triggered.');
 
-    if (await this.isValidConfig(options) === false) return
+    if (await this.isValidConfig(options) === false) return false
 
-    const remoteFilePath = path.join(this.remoteDataPath, `${options.session}.zip`).replace(/\\/g, '/');
-    options.remoteFilePath = remoteFilePath;
-    
-    // await this.#deletePrevious(options);
-    
+    const sessionName = path.basename(options.session)
+    const remoteFilePath = path.posix.join(this.remoteDataPath, `${sessionName}.zip`)
+    options.remoteFilePath = remoteFilePath
+
     try {
-      const fileStream = fs.createReadStream(`${options.session}.zip`);
+      const fileStream = fs.createReadStream(`${options.session}.zip`)
       const params = {
         Bucket: this.bucketName,
         Key: remoteFilePath,
         Body: fileStream,
         ACL: 'private',
         ContentType: 'application/zip'
-      };
-      await this.s3Client.send(new PutObjectCommand(params));
-      this.debugLog(`[METHOD: save] File saved. PATH='${remoteFilePath}'.`);
+      }
+      await this.s3Client.send(new PutObjectCommand(params))
+      this.debugLog(`[METHOD: save] File saved. PATH='${remoteFilePath}'.`)
+      return true
     } catch (error) {
-      this.debugLog(`[METHOD: save] Error: ${error.message}`);
-      throw error;      
+      this.debugLog(`[METHOD: save] Error: ${error.message}`)
+      throw error
     }
 
   }
@@ -113,52 +115,68 @@ class AwsS3Store {
   async extract(options) {
     this.debugLog('[METHOD: extract] Triggered.');
 
-    if (await this.isValidConfig(options) === false) return
+    if (await this.isValidConfig(options) === false) return false
 
-    const remoteFilePath = path.join(this.remoteDataPath, `${options.session}.zip`).replace(/\\/g, '/');
+    const sessionName = path.basename(options.session)
+    const remoteFilePath = path.posix.join(this.remoteDataPath, `${sessionName}.zip`)
     const params = {
       Bucket: this.bucketName,
       Key: remoteFilePath
-    };
+    }
 
     try {
-      const fileStream = fs.createWriteStream(options.path);
-      const response = await this.s3Client.send(new GetObjectCommand(params));
+      // Ensure parent directory exists before creating the write stream
+      await fs.promises.mkdir(path.dirname(options.path), { recursive: true })
+
+      const fileStream = fs.createWriteStream(options.path)
+      const response = await this.s3Client.send(new GetObjectCommand(params))
       await new Promise((resolve, reject) => {
         response.Body.pipe(fileStream)
           .on('error', reject)
-          .on('finish', resolve);
-      });
-  
-      this.debugLog(`[METHOD: extract] File extracted. REMOTE_PATH='${remoteFilePath}', LOCAL_PATH='${options.path}'.`);
+          .on('finish', resolve)
+      })
+
+      // Verify file exists and has content
+      try {
+        const stat = fs.statSync(options.path)
+        if (!stat.isFile() || stat.size === 0) {
+          throw new Error('Downloaded file is empty or invalid')
+        }
+      } catch (err) {
+        throw err
+      }
+
+      this.debugLog(`[METHOD: extract] File extracted. REMOTE_PATH='${remoteFilePath}', LOCAL_PATH='${options.path}'.`)
+      return true
     } catch (error) {
-      this.debugLog(`[METHOD: extract] Error: ${error.message}`);
-      throw error;
+      this.debugLog(`[METHOD: extract] Error: ${error.message}`)
+      throw error
     }
   }
 
   async delete(options) {
     this.debugLog('[METHOD: delete] Triggered.');
 
-    if (await this.isValidConfig(options) === false) return
+    if (await this.isValidConfig(options) === false) return false
 
-    const remoteFilePath = path.join(this.remoteDataPath, `${options.session}.zip`).replace(/\\/g, '/');
+    const sessionName = path.basename(options.session)
+    const remoteFilePath = path.posix.join(this.remoteDataPath, `${sessionName}.zip`)
     const params = {
       Bucket: this.bucketName,
       Key: remoteFilePath
-    };
+    }
     try {
-      await this.s3Client.send(new HeadObjectCommand(params));
-      await this.s3Client.send(new DeleteObjectCommand(params));
-      this.debugLog(`[METHOD: delete] File deleted. PATH='${remoteFilePath}'.`);
+      await this.s3Client.send(new HeadObjectCommand(params))
+      await this.s3Client.send(new DeleteObjectCommand(params))
+      this.debugLog(`[METHOD: delete] File deleted. PATH='${remoteFilePath}'.`)
+      return true
     } catch (err) {
       if (err.name === 'NoSuchKey' || err.name === 'NotFound') {
-        this.debugLog(`[METHOD: delete] File not found. PATH='${remoteFilePath}'.`);
-        return;
-      } 
-      this.debugLog(`[METHOD: delete] Error: ${err.message}`);
-      // throw err;
-      return
+        this.debugLog(`[METHOD: delete] File not found. PATH='${remoteFilePath}'.`)
+        return false
+      }
+      this.debugLog(`[METHOD: delete] Error: ${err.message}`)
+      return false
     }
   }
 
